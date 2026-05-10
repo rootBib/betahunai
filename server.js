@@ -9,7 +9,7 @@ const Anthropic = require('@anthropic-ai/sdk')
 require('dotenv').config()
 
 const app = express()
-const PORT = process.env.PORT || 3000
+const PORT = process.env.PORT || 1000
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 app.use(cors())
