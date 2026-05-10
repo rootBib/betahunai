@@ -1,20 +1,42 @@
 /**
- * Betahun AI Content Studio — Express Backend
+ * Betahun AI Content Studio — Express Backend (Google Gemini)
  * Run: npm install && node server.js
+ * 
+ * Required: GEMINI_API_KEY in .env or environment variables
+ * Get free API key: https://makersuite.google.com/app/apikey
  */
 
 const express = require('express')
 const cors = require('cors')
-const Anthropic = require('@anthropic-ai/sdk')
+const { GoogleGenerativeAI } = require('@google/generative-ai')
 require('dotenv').config()
 
 const app = express()
-const PORT = process.env.PORT || 1000
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const PORT = process.env.PORT || 3000
+
+// API Key ማረጋገጫ
+if (!process.env.GEMINI_API_KEY) {
+  console.error('❌ GEMINI_API_KEY not found in environment variables!')
+  console.error('Get your free API key at: https://makersuite.google.com/app/apikey')
+  console.error('Then add it to your .env file or Render environment variables.')
+}
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
 
 app.use(cors())
 app.use(express.json())
 app.use(express.static('public')) // serve frontend from /public
+
+// ─── Gemini Configuration ─────────────────────────────────────────
+const MODEL_NAME = 'gemini-2.0-flash' // Fast & free tier available
+
+const generationConfig = {
+  temperature: 0.8,
+  topP: 0.95,
+  topK: 40,
+  maxOutputTokens: 1024,
+  responseMimeType: 'application/json', // Direct JSON response
+}
 
 // ─── Prompt Engineering ───────────────────────────────────────────
 function buildSystemPrompt() {
@@ -31,7 +53,8 @@ You deeply understand:
 
 Your scripts are authentic, locally resonant, and drive real action.
 
-ALWAYS respond with valid JSON only. No markdown, no preamble, no explanation.
+IMPORTANT: You MUST respond with ONLY valid JSON. No markdown, no backticks, no explanation.
+
 Format:
 {
   "hook": "Opening 1-3 lines that grab attention instantly",
@@ -80,7 +103,7 @@ Script Rules:
 - For Amharic: use authentic Ge'ez/Ethiopic script
 - Length target: ${length}
 
-Return only the JSON object.`
+CRITICAL: Return ONLY the JSON object. No backticks, no markdown, no explanation.`
 }
 
 // ─── Routes ───────────────────────────────────────────────────────
@@ -88,28 +111,102 @@ Return only the JSON object.`
 app.post('/generate', async (req, res) => {
   const { businessType, platform, goal, tone, language, length, description } = req.body
 
+  // Validate input
   if (!description || description.trim().length < 10) {
-    return res.status(400).json({ error: 'Business description is required (min 10 characters).' })
+    return res.status(400).json({ 
+      success: false,
+      error: 'Business description is required (min 10 characters).' 
+    })
   }
 
+  console.log('📝 Generating:', businessType, '-', platform)
+  console.log('🎯 Goal:', goal, '| 🗣️ Language:', language, '| 🎭 Tone:', tone)
+  
   try {
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 900,
-      system: buildSystemPrompt(),
-      messages: [{ role: 'user', content: buildUserPrompt(req.body) }]
+    const model = genAI.getGenerativeModel({ 
+      model: MODEL_NAME,
+      generationConfig: generationConfig,
     })
 
-    const raw = message.content[0].text
+    // Chat with context
+    const chat = model.startChat({
+      history: [
+        {
+          role: 'user',
+          parts: [{ text: buildSystemPrompt() }],
+        },
+        {
+          role: 'model',
+          parts: [{ text: 'I understand. I will generate content as specified and return only valid JSON.' }],
+        },
+      ],
+    })
+
+    const result = await chat.sendMessage(buildUserPrompt(req.body))
+    const response = result.response
+    const raw = response.text()
+    
+    console.log('✅ AI Response received')
+    
     let parsed
 
     try {
-      const clean = raw.replace(/```json|```/g, '').trim()
+      // Clean the response
+      let clean = raw.trim()
+      clean = clean.replace(/```json\s*/g, '')
+      clean = clean.replace(/```\s*/g, '')
+      clean = clean.replace(/^json\s*/i, '')
+      clean = clean.trim()
+      
+      // Extract JSON object
+      const startIndex = clean.indexOf('{')
+      const endIndex = clean.lastIndexOf('}') + 1
+      
+      if (startIndex !== -1 && endIndex > startIndex) {
+        clean = clean.substring(startIndex, endIndex)
+      }
+      
       parsed = JSON.parse(clean)
-    } catch {
-      return res.status(500).json({ error: 'AI returned malformed JSON.', raw })
+      
+      // Validate required fields
+      if (!parsed.hook || !parsed.script || !parsed.cta || !parsed.hashtags) {
+        throw new Error('Missing required fields in AI response')
+      }
+      
+      // Hashtags array check
+      if (!Array.isArray(parsed.hashtags)) {
+        parsed.hashtags = [parsed.hashtags]
+      }
+      
+    } catch (parseError) {
+      console.error('❌ JSON Parse Error:', parseError)
+      console.error('📄 Raw:', raw.substring(0, 200))
+      
+      // Manual extraction fallback
+      try {
+        const hookMatch = raw.match(/"hook"\s*:\s*"([^"]+)"/)
+        const scriptMatch = raw.match(/"script"\s*:\s*"([^"]+)"/)
+        const ctaMatch = raw.match(/"cta"\s*:\s*"([^"]+)"/)
+        const tagsMatch = raw.match(/"hashtags"\s*:\s*\[([^\]]+)\]/)
+        
+        parsed = {
+          hook: hookMatch?.[1] || 'እንኳን ደህና መጡ!',
+          script: scriptMatch?.[1] || description || 'Sample content',
+          cta: ctaMatch?.[1] || 'አሁኑኑ ይደውሉ!',
+          hashtags: tagsMatch?.[1]?.split(',').map(t => t.trim().replace(/"/g, '')) || 
+                   ['ኢትዮጵያ', 'ንግድ', platform, businessType]
+        }
+      } catch {
+        return res.status(500).json({ 
+          success: false,
+          error: 'AI returned invalid JSON format.',
+          raw: raw.substring(0, 200) 
+        })
+      }
     }
 
+    console.log('✅ Generation successful!')
+    
     return res.json({
       success: true,
       data: parsed,
@@ -117,11 +214,64 @@ app.post('/generate', async (req, res) => {
     })
 
   } catch (err) {
-    console.error('Anthropic API error:', err)
-    return res.status(500).json({ error: 'AI generation failed.', details: err.message })
+    console.error('❌ Gemini API Error:', err.message)
+    
+    let errorMessage = 'AI generation failed.'
+    
+    if (err.message?.includes('API_KEY_INVALID')) {
+      errorMessage = 'Invalid API key. Check your GEMINI_API_KEY.'
+    } else if (err.message?.includes('RESOURCE_EXHAUSTED')) {
+      errorMessage = 'API quota exceeded. Try again later.'
+    } else if (err.message?.includes('SAFETY')) {
+      errorMessage = 'Content blocked by safety filters.'
+    } else if (err.status === 429) {
+      errorMessage = 'Too many requests. Please wait a moment.'
+    } else if (err.status === 503) {
+      errorMessage = 'Gemini service temporarily unavailable.'
+    }
+    
+    return res.status(500).json({ 
+      success: false,
+      error: errorMessage,
+      details: err.message 
+    })
   }
 })
 
-app.get('/health', (req, res) => res.json({ status: 'ok', service: 'Betahun AI Content Studio' }))
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    service: 'Betahun AI Content Studio',
+    model: MODEL_NAME,
+    provider: 'Google Gemini',
+    timestamp: new Date().toISOString()
+  })
+})
 
-app.listen(PORT, () => console.log(`\n✦ Betahun AI Content Studio\n   http://localhost:${PORT}\n`))
+// Test Gemini connection
+app.get('/test-gemini', async (req, res) => {
+  try {
+    const model = genAI.getGenerativeModel({ model: MODEL_NAME })
+    const result = await model.generateContent('Say "Gemini is working!" in English and Amharic.')
+    const response = result.response
+    res.json({ 
+      success: true, 
+      message: response.text(),
+      model: MODEL_NAME
+    })
+  } catch (err) {
+    res.status(500).json({ 
+      success: false, 
+      error: err.message 
+    })
+  }
+})
+
+app.listen(PORT, () => {
+  console.log(`\n✦ Betahun AI Content Studio (Google Gemini)`)
+  console.log(`   Server: http://localhost:${PORT}`)
+  console.log(`   Health: http://localhost:${PORT}/health`)
+  console.log(`   Test:   http://localhost:${PORT}/test-gemini`)
+  console.log(`   Model:  ${MODEL_NAME}\n`)
+})
