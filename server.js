@@ -123,3 +123,6 @@ app.listen(PORT, () => {
   console.log(`📍 Test: http://localhost:${PORT}/test`);
   console.log(`📍 Generate: http://localhost:${PORT}/generate\n`);
 });
+app.get('/', (req, res) => {
+  res.send('BetahunAI backend is running. Use the frontend to generate scripts.');
+});
