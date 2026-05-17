@@ -20,9 +20,12 @@ if (!GEMINI_KEY) {
 
 const genAI = new GoogleGenerativeAI(GEMINI_KEY);
 
+// Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static('public'));   // If you have a public folder with index.html, that would be served here
+
+// ---------- ROUTES ----------
 
 // Simple test route
 app.get('/test', (req, res) => {
@@ -31,6 +34,11 @@ app.get('/test', (req, res) => {
     gemini_key_exists: !!GEMINI_KEY,
     time: new Date().toISOString()
   });
+});
+
+// Homepage route – FIXED HERE, BEFORE app.listen
+app.get('/', (req, res) => {
+  res.send('BetahunAI backend is running. Use the frontend to generate scripts.');
 });
 
 // Generate route
@@ -118,11 +126,10 @@ You MUST respond with ONLY valid JSON (no markdown, no backticks):
   }
 });
 
+// ---------- START SERVER ----------
 app.listen(PORT, () => {
   console.log(`\n🚀 Betahun AI Server running on port ${PORT}`);
   console.log(`📍 Test: http://localhost:${PORT}/test`);
-  console.log(`📍 Generate: http://localhost:${PORT}/generate\n`);
-});
-app.get('/', (req, res) => {
-  res.send('BetahunAI backend is running. Use the frontend to generate scripts.');
+  console.log(`📍 Generate: http://localhost:${PORT}/generate`);
+  console.log(`📍 Home: http://localhost:${PORT}/`);
 });
